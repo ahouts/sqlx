@@ -63,8 +63,14 @@ pub struct SqliteConnectOptions {
     pub(crate) busy_timeout: Duration,
     pub(crate) log_settings: LogSettings,
     pub(crate) immutable: bool,
+    pub(crate) vfs: Option<Cow<'static, str>>,
 
     pub(crate) pragmas: IndexMap<Cow<'static, str>, Option<Cow<'static, str>>>,
+    /// Extensions are specified as a pair of <Extension Name : Optional Entry Point>, the majority
+    /// of SQLite extensions will use the default entry points specified in the docs, these should
+    /// be added to the map with a `None` value.
+    /// <https://www.sqlite.org/loadext.html#loading_an_extension>
+    pub(crate) extensions: IndexMap<Cow<'static, str>, Option<Cow<'static, str>>>,
 
     pub(crate) command_channel_size: usize,
     pub(crate) row_channel_size: usize,
@@ -101,6 +107,42 @@ impl SqliteConnectOptions {
         // SQLCipher special case: if the `key` pragma is set, it must be executed first.
         pragmas.insert("key".into(), None);
 
+        // Other SQLCipher pragmas that has to be after the key, but before any other operation on the database.
+        // https://www.zetetic.net/sqlcipher/sqlcipher-api/
+
+        // Bytes of the database file that is not encrypted
+        // Default for SQLCipher v4 is 0
+        // If greater than zero 'cipher_salt' pragma must be also defined
+        pragmas.insert("cipher_plaintext_header_size".into(), None);
+
+        // Allows to provide salt manually
+        // By default SQLCipher sets salt automatically, use only in conjunction with
+        // 'cipher_plaintext_header_size' pragma
+        pragmas.insert("cipher_salt".into(), None);
+
+        // Number of iterations used in PBKDF2 key derivation.
+        // Default for SQLCipher v4 is 256000
+        pragmas.insert("kdf_iter".into(), None);
+
+        // Define KDF algorithm to be used.
+        // Default for SQLCipher v4 is PBKDF2_HMAC_SHA512.
+        pragmas.insert("cipher_kdf_algorithm".into(), None);
+
+        // Enable or disable HMAC functionality.
+        // Default for SQLCipher v4 is 1.
+        pragmas.insert("cipher_use_hmac".into(), None);
+
+        // Set default encryption settings depending on the version 1,2,3, or 4.
+        pragmas.insert("cipher_compatibility".into(), None);
+
+        // Page size of encrypted database.
+        // Default for SQLCipher v4 is 4096.
+        pragmas.insert("cipher_page_size".into(), None);
+
+        // Choose algorithm used for HMAC.
+        // Default for SQLCipher v4 is HMAC_SHA512.
+        pragmas.insert("cipher_hmac_algorithm".into(), None);
+
         // Normally, page_size must be set before any other action on the database.
         // Defaults to 4096 for new databases.
         pragmas.insert("page_size".into(), None);
@@ -135,7 +177,9 @@ impl SqliteConnectOptions {
             busy_timeout: Duration::from_secs(5),
             log_settings: Default::default(),
             immutable: false,
+            vfs: None,
             pragmas,
+            extensions: Default::default(),
             collations: Default::default(),
             serialized: false,
             thread_name: Arc::new(DebugFn(|id| format!("sqlx-sqlite-worker-{}", id))),
@@ -282,9 +326,9 @@ impl SqliteConnectOptions {
     /// Note this excerpt:
     /// > The collating function must obey the following properties for all strings A, B, and C:
     /// >
-    /// > If A==B then B==A.  
-    /// > If A==B and B==C then A==C.  
-    /// > If A\<B then B>A.  
+    /// > If A==B then B==A.
+    /// > If A==B and B==C then A==C.
+    /// > If A\<B then B>A.
     /// > If A<B and B<C then A<C.
     /// >
     /// > If a collating function fails any of the above constraints and that collating function is
@@ -326,7 +370,7 @@ impl SqliteConnectOptions {
     /// ### Note
     /// Setting this to `true` may help if you are getting access violation errors or segmentation
     /// faults, but will also incur a significant performance penalty. You should leave this
-    /// set to `false` if at all possible.    
+    /// set to `false` if at all possible.
     ///
     /// If you do end up needing to set this to `true` for some reason, please
     /// [open an issue](https://github.com/launchbadge/sqlx/issues/new/choose) as this may indicate
@@ -365,6 +409,53 @@ impl SqliteConnectOptions {
     /// in order to limit CPU and memory usage.
     pub fn row_buffer_size(mut self, size: usize) -> Self {
         self.row_channel_size = size;
+        self
+    }
+
+    /// Sets the [`vfs`](https://www.sqlite.org/vfs.html) parameter of the database connection.
+    ///
+    /// The default value is empty, and sqlite will use the default VFS object depending on the
+    /// operating system.
+    pub fn vfs(mut self, vfs_name: impl Into<Cow<'static, str>>) -> Self {
+        self.vfs = Some(vfs_name.into());
+        self
+    }
+
+    /// Load an [extension](https://www.sqlite.org/loadext.html) at run-time when the database connection
+    /// is established, using the default entry point.
+    ///
+    /// Most common SQLite extensions can be loaded using this method, for extensions where you need
+    /// to specify the entry point, use [`extension_with_entrypoint`][`Self::extension_with_entrypoint`] instead.
+    ///
+    /// Multiple extensions can be loaded by calling the method repeatedly on the options struct, they
+    /// will be loaded in the order they are added.
+    /// ```rust,no_run
+    /// # use sqlx_core::error::Error;
+    /// use std::str::FromStr;
+    /// use sqlx::sqlite::SqliteConnectOptions;
+    /// # fn options() -> Result<SqliteConnectOptions, Error> {
+    /// let options = SqliteConnectOptions::from_str("sqlite://data.db")?
+    ///     .extension("vsv")
+    ///     .extension("mod_spatialite");
+    /// # Ok(options)
+    /// # }
+    /// ```
+    pub fn extension(mut self, extension_name: impl Into<Cow<'static, str>>) -> Self {
+        self.extensions.insert(extension_name.into(), None);
+        self
+    }
+
+    /// Load an extension with a specified entry point.
+    ///
+    /// Useful when using non-standard extensions, or when developing your own, the second argument
+    /// specifies where SQLite should expect to find the extension init routine.
+    pub fn extension_with_entrypoint(
+        mut self,
+        extension_name: impl Into<Cow<'static, str>>,
+        entry_point: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        self.extensions
+            .insert(extension_name.into(), Some(entry_point.into()));
         self
     }
 }
