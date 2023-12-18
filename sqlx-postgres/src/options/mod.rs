@@ -23,6 +23,9 @@ mod ssl_mode;
 /// postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
 /// ```
 ///
+/// This type also implements [`FromStr`][std::str::FromStr] so you can parse it from a string
+/// containing a connection URL and then further adjust options if necessary (see example below).
+///
 /// ## Parameters
 ///
 /// |Parameter|Default|Description|
@@ -55,13 +58,10 @@ mod ssl_mode;
 /// # Example
 ///
 /// ```rust,no_run
-/// # use sqlx_core::error::Error;
-/// # use sqlx_core::connection::{Connection, ConnectOptions};
-/// # use sqlx_core::postgres::{PgConnectOptions, PgConnection, PgSslMode};
-/// #
-/// # fn main() {
-/// # #[cfg(feature = "_rt")]
-/// # sqlx::__rt::test_block_on(async move {
+/// use sqlx::{Connection, ConnectOptions};
+/// use sqlx::postgres::{PgConnectOptions, PgConnection, PgPool, PgSslMode};
+///
+/// # async fn example() -> sqlx::Result<()> {
 /// // URL connection string
 /// let conn = PgConnection::connect("postgres://localhost/mydb").await?;
 ///
@@ -72,9 +72,17 @@ mod ssl_mode;
 ///     .username("secret-user")
 ///     .password("secret-password")
 ///     .ssl_mode(PgSslMode::Require)
-///     .connect().await?;
-/// # Result::<(), Error>::Ok(())
-/// # }).unwrap();
+///     .connect()
+///     .await?;
+///
+/// // Modifying options parsed from a string
+/// let mut opts: PgConnectOptions = "postgres://localhost/mydb".parse()?;
+///
+/// // Change the log verbosity level for queries.
+/// // Information about SQL queries is logged at `DEBUG` level by default.
+/// opts.log_statements(log::LevelFilter::Trace);
+///
+/// let pool = PgPool::connect_with(&opts).await?;
 /// # }
 /// ```
 #[derive(Debug, Clone)]
@@ -157,7 +165,7 @@ impl PgConnectOptions {
                 .unwrap_or_default(),
             statement_cache_capacity: 100,
             application_name: var("PGAPPNAME").ok(),
-            extra_float_digits: Some("3".into()),
+            extra_float_digits: Some("2".into()),
             log_settings: Default::default(),
             options: var("PGOPTIONS").ok(),
         }
@@ -195,6 +203,20 @@ impl PgConnectOptions {
     pub fn host(mut self, host: &str) -> Self {
         self.host = host.to_owned();
         self
+    }
+
+    /// Get the current host.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use sqlx_core::postgres::PgConnectOptions;
+    /// let options = PgConnectOptions::new()
+    ///     .host("127.0.0.1");
+    /// assert_eq!(options.get_host(), "127.0.0.1");
+    /// ```
+    pub fn get_host(&self) -> &str {
+        self.host.as_str()
     }
 
     /// Sets the port to connect to at the server host.
@@ -336,6 +358,32 @@ impl PgConnectOptions {
         self
     }
 
+    /// Sets the SSL client certificate as a PEM-encoded byte slice.
+    ///
+    /// This should be an ASCII-encoded blob that starts with `-----BEGIN CERTIFICATE-----`.
+    ///
+    /// # Example
+    /// Note: embedding SSL certificates and keys in the binary is not advised.
+    /// This is for illustration purposes only.
+    ///
+    /// ```rust
+    /// # use sqlx_core::postgres::{PgSslMode, PgConnectOptions};
+    ///
+    /// const CERT: &[u8] = b"\
+    /// -----BEGIN CERTIFICATE-----
+    /// <Certificate data here.>
+    /// -----END CERTIFICATE-----";
+    ///    
+    /// let options = PgConnectOptions::new()
+    ///     // Providing a CA certificate with less than VerifyCa is pointless
+    ///     .ssl_mode(PgSslMode::VerifyCa)
+    ///     .ssl_client_cert_from_pem(CERT);
+    /// ```
+    pub fn ssl_client_cert_from_pem(mut self, cert: impl AsRef<[u8]>) -> Self {
+        self.ssl_client_cert = Some(CertificateInput::Inline(cert.as_ref().to_vec()));
+        self
+    }
+
     /// Sets the name of a file containing SSL client key.
     ///
     /// # Example
@@ -349,6 +397,32 @@ impl PgConnectOptions {
     /// ```
     pub fn ssl_client_key(mut self, key: impl AsRef<Path>) -> Self {
         self.ssl_client_key = Some(CertificateInput::File(key.as_ref().to_path_buf()));
+        self
+    }
+
+    /// Sets the SSL client key as a PEM-encoded byte slice.
+    ///
+    /// This should be an ASCII-encoded blob that starts with `-----BEGIN PRIVATE KEY-----`.
+    ///
+    /// # Example
+    /// Note: embedding SSL certificates and keys in the binary is not advised.
+    /// This is for illustration purposes only.
+    ///
+    /// ```rust
+    /// # use sqlx_core::postgres::{PgSslMode, PgConnectOptions};
+    ///
+    /// const KEY: &[u8] = b"\
+    /// -----BEGIN PRIVATE KEY-----
+    /// <Private key data here.>
+    /// -----END PRIVATE KEY-----";
+    ///
+    /// let options = PgConnectOptions::new()
+    ///     // Providing a CA certificate with less than VerifyCa is pointless
+    ///     .ssl_mode(PgSslMode::VerifyCa)
+    ///     .ssl_client_key_from_pem(KEY);
+    /// ```
+    pub fn ssl_client_key_from_pem(mut self, key: impl AsRef<[u8]>) -> Self {
+        self.ssl_client_key = Some(CertificateInput::Inline(key.as_ref().to_vec()));
         self
     }
 
@@ -468,7 +542,7 @@ impl PgConnectOptions {
                 options_str.push(' ');
             }
 
-            write!(options_str, "-c {}={}", k, v).expect("failed to write an option to the string");
+            write!(options_str, "-c {k}={v}").expect("failed to write an option to the string");
         }
         self
     }
@@ -492,7 +566,7 @@ impl PgConnectOptions {
 
 fn default_host(port: u16) -> String {
     // try to check for the existence of a unix socket and uses that
-    let socket = format!(".s.PGSQL.{}", port);
+    let socket = format!(".s.PGSQL.{port}");
     let candidates = [
         "/var/run/postgresql", // Debian
         "/private/tmp",        // OSX (homebrew)

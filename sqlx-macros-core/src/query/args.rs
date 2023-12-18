@@ -60,7 +60,7 @@ pub fn quote_args<DB: DatabaseExt>(
                                 .ok_or_else(|| {
                                     if let Some(feature_gate) = <DB as DatabaseExt>::get_feature_gate(&param_ty) {
                                         format!(
-                                            "optional feature `{}` required for type {} of param #{}",
+                                            "optional sqlx feature `{}` required for type {} of param #{}",
                                             feature_gate,
                                             param_ty,
                                             i + 1,
@@ -70,7 +70,7 @@ pub fn quote_args<DB: DatabaseExt>(
                                     }
                                 })?
                                 .parse::<TokenStream>()
-                                .map_err(|_| format!("Rust type mapping for {} not parsable", param_ty))?
+                                .map_err(|_| format!("Rust type mapping for {param_ty} not parsable"))?
 
                         }
                     };

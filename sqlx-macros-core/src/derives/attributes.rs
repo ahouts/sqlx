@@ -1,9 +1,9 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use syn::punctuated::Punctuated;
-use syn::spanned::Spanned;
-use syn::token::Comma;
-use syn::{Attribute, DeriveInput, Field, Lit, Meta, MetaNameValue, NestedMeta, Type, Variant};
+use syn::{
+    punctuated::Punctuated, spanned::Spanned, token::Comma, Attribute, DeriveInput, Field, Lit,
+    Meta, MetaNameValue, NestedMeta, Type, Variant,
+};
 
 macro_rules! assert_attribute {
     ($e:expr, $err:expr, $input:expr) => {
@@ -56,6 +56,8 @@ pub struct SqlxContainerAttributes {
     pub type_name: Option<TypeName>,
     pub rename_all: Option<RenameAll>,
     pub repr: Option<Ident>,
+    pub no_pg_array: bool,
+    pub default: bool,
 }
 
 pub struct SqlxChildAttributes {
@@ -64,6 +66,7 @@ pub struct SqlxChildAttributes {
     pub flatten: bool,
     pub try_from: Option<Type>,
     pub skip: bool,
+    pub json: bool,
 }
 
 pub fn parse_container_attributes(input: &[Attribute]) -> syn::Result<SqlxContainerAttributes> {
@@ -71,6 +74,8 @@ pub fn parse_container_attributes(input: &[Attribute]) -> syn::Result<SqlxContai
     let mut repr = None;
     let mut type_name = None;
     let mut rename_all = None;
+    let mut no_pg_array = None;
+    let mut default = None;
 
     for attr in input
         .iter()
@@ -86,6 +91,10 @@ pub fn parse_container_attributes(input: &[Attribute]) -> syn::Result<SqlxContai
                         NestedMeta::Meta(meta) => match meta {
                             Meta::Path(p) if p.is_ident("transparent") => {
                                 try_set!(transparent, true, value)
+                            }
+
+                            Meta::Path(p) if p.is_ident("no_pg_array") => {
+                                try_set!(no_pg_array, true, value);
                             }
 
                             Meta::NameValue(MetaNameValue {
@@ -122,6 +131,10 @@ pub fn parse_container_attributes(input: &[Attribute]) -> syn::Result<SqlxContai
                                 )
                             }
 
+                            Meta::Path(p) if p.is_ident("default") => {
+                                try_set!(default, true, value)
+                            }
+
                             u => fail!(u, "unexpected attribute"),
                         },
                         u => fail!(u, "unexpected attribute"),
@@ -148,6 +161,8 @@ pub fn parse_container_attributes(input: &[Attribute]) -> syn::Result<SqlxContai
         repr,
         type_name,
         rename_all,
+        no_pg_array: no_pg_array.unwrap_or(false),
+        default: default.unwrap_or(false),
     })
 }
 
@@ -157,6 +172,7 @@ pub fn parse_child_attributes(input: &[Attribute]) -> syn::Result<SqlxChildAttri
     let mut try_from = None;
     let mut flatten = false;
     let mut skip: bool = false;
+    let mut json = false;
 
     for attr in input.iter().filter(|a| a.path.is_ident("sqlx")) {
         let meta = attr
@@ -180,11 +196,19 @@ pub fn parse_child_attributes(input: &[Attribute]) -> syn::Result<SqlxChildAttri
                         Meta::Path(path) if path.is_ident("default") => default = true,
                         Meta::Path(path) if path.is_ident("flatten") => flatten = true,
                         Meta::Path(path) if path.is_ident("skip") => skip = true,
+                        Meta::Path(path) if path.is_ident("json") => json = true,
                         u => fail!(u, "unexpected attribute"),
                     },
                     u => fail!(u, "unexpected attribute"),
                 }
             }
+        }
+
+        if json && flatten {
+            fail!(
+                attr,
+                "Cannot use `json` and `flatten` together on the same field"
+            );
         }
     }
 
@@ -194,6 +218,7 @@ pub fn parse_child_attributes(input: &[Attribute]) -> syn::Result<SqlxChildAttri
         flatten,
         try_from,
         skip,
+        json,
     })
 }
 
@@ -226,6 +251,12 @@ pub fn check_enum_attributes(input: &DeriveInput) -> syn::Result<SqlxContainerAt
     assert_attribute!(
         !attributes.transparent,
         "unexpected #[sqlx(transparent)]",
+        input
+    );
+
+    assert_attribute!(
+        !attributes.no_pg_array,
+        "unused #[sqlx(no_pg_array)]; derive does not emit `PgHasArrayType` impls for enums",
         input
     );
 
@@ -285,6 +316,12 @@ pub fn check_struct_attributes<'a>(
     assert_attribute!(
         attributes.rename_all.is_none(),
         "unexpected #[sqlx(rename_all = ..)]",
+        input
+    );
+
+    assert_attribute!(
+        !attributes.no_pg_array,
+        "unused #[sqlx(no_pg_array)]; derive does not emit `PgHasArrayType` impls for custom structs",
         input
     );
 

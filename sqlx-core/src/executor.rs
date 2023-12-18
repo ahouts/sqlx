@@ -20,8 +20,15 @@ use std::fmt::Debug;
 /// Implemented for the following:
 ///
 ///  * [`&Pool`](super::pool::Pool)
-///  * [`&mut PoolConnection`](super::pool::PoolConnection)
 ///  * [`&mut Connection`](super::connection::Connection)
+///
+/// The [`Executor`](crate::Executor) impls for [`Transaction`](crate::Transaction)
+/// and [`PoolConnection`](crate::pool::PoolConnection) have been deleted because they
+/// cannot exist in the new crate architecture without rewriting the Executor trait entirely.
+/// To fix this breakage, simply add a dereference where an impl [`Executor`](crate::Executor) is expected, as
+/// they both dereference to the inner connection type which will still implement it:
+/// * `&mut transaction` -> `&mut *transaction`
+/// * `&mut connection` -> `&mut *connection`
 ///
 pub trait Executor<'c>: Send + Debug + Sized {
     type Database: Database;
@@ -202,7 +209,7 @@ pub trait Execute<'q, DB: Database>: Send + Sized {
 }
 
 // NOTE: `Execute` is explicitly not implemented for String and &String to make it slightly more
-//       involved to write `conn.execute(format!("SELECT {}", val))`
+//       involved to write `conn.execute(format!("SELECT {val}"))`
 impl<'q, DB: Database> Execute<'q, DB> for &'q str {
     #[inline]
     fn sql(&self) -> &'q str {

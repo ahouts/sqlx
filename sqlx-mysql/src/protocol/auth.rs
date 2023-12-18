@@ -7,6 +7,7 @@ pub enum AuthPlugin {
     MySqlNativePassword,
     CachingSha2Password,
     Sha256Password,
+    MySqlClearPassword,
     Dialog,
 }
 
@@ -16,6 +17,7 @@ impl AuthPlugin {
             AuthPlugin::MySqlNativePassword => "mysql_native_password",
             AuthPlugin::CachingSha2Password => "caching_sha2_password",
             AuthPlugin::Sha256Password => "sha256_password",
+            AuthPlugin::MySqlClearPassword => "mysql_clear_password",
             AuthPlugin::Dialog => "dialog",
         }
     }
@@ -25,7 +27,7 @@ impl AuthPlugin {
         use AuthPlugin::*;
         match self {
             MySqlNativePassword | CachingSha2Password | Sha256Password => 21,
-            Dialog => 0,
+            Dialog | MySqlClearPassword => 0,
         }
     }
 }
@@ -38,6 +40,7 @@ impl FromStr for AuthPlugin {
             "mysql_native_password" => Ok(AuthPlugin::MySqlNativePassword),
             "caching_sha2_password" => Ok(AuthPlugin::CachingSha2Password),
             "sha256_password" => Ok(AuthPlugin::Sha256Password),
+            "mysql_clear_password" => Ok(AuthPlugin::MySqlClearPassword),
             "dialog" => Ok(AuthPlugin::Dialog),
 
             _ => Err(err_protocol!("unknown authentication plugin: {}", s)),

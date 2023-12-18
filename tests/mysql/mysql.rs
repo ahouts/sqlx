@@ -347,7 +347,7 @@ async fn test_issue_622() -> anyhow::Result<()> {
         .connect(&std::env::var("DATABASE_URL").unwrap())
         .await?;
 
-    println!("pool state: {:?}", pool);
+    println!("pool state: {pool:?}");
 
     let mut handles = vec![];
 
@@ -375,7 +375,7 @@ async fn test_issue_622() -> anyhow::Result<()> {
                         println!("{} acquire took {:?}", i, start.elapsed());
                         drop(conn);
                     }
-                    Err(e) => panic!("{} acquire returned error: {} pool state: {:?}", i, e, pool),
+                    Err(e) => panic!("{i} acquire returned error: {e} pool state: {pool:?}"),
                 }
             }
 
@@ -443,6 +443,39 @@ async fn it_can_work_with_transactions() -> anyhow::Result<()> {
         .fetch_one(&mut conn)
         .await?;
     assert_eq!(count, 1);
+
+    Ok(())
+}
+
+#[sqlx_macros::test]
+async fn it_can_handle_split_packets() -> anyhow::Result<()> {
+    // This will only take effect on new connections
+    new::<MySql>()
+        .await?
+        .execute("SET GLOBAL max_allowed_packet = 4294967297")
+        .await?;
+
+    let mut conn = new::<MySql>().await?;
+
+    conn.execute(
+        r#"
+CREATE TEMPORARY TABLE large_table (data LONGBLOB);
+        "#,
+    )
+    .await?;
+
+    let data = vec![0x41; 0xFF_FF_FF * 2];
+
+    sqlx::query("INSERT INTO large_table (data) VALUES (?)")
+        .bind(&data)
+        .execute(&mut conn)
+        .await?;
+
+    let ret: Vec<u8> = sqlx::query_scalar("SELECT * FROM large_table")
+        .fetch_one(&mut conn)
+        .await?;
+
+    assert_eq!(ret, data);
 
     Ok(())
 }

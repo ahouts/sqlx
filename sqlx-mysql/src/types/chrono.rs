@@ -1,5 +1,7 @@
 use bytes::Buf;
-use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 
 use crate::decode::Decode;
 use crate::encode::{Encode, IsNull};
@@ -31,7 +33,7 @@ impl<'r> Decode<'r, MySql> for DateTime<Utc> {
     fn decode(value: MySqlValueRef<'r>) -> Result<Self, BoxDynError> {
         let naive: NaiveDateTime = Decode::<MySql>::decode(value)?;
 
-        Ok(DateTime::from_utc(naive, Utc))
+        Ok(Utc.from_utc_datetime(&naive))
     }
 }
 
@@ -236,7 +238,7 @@ impl<'r> Decode<'r, MySql> for NaiveDateTime {
 fn encode_date(date: &NaiveDate, buf: &mut Vec<u8>) {
     // MySQL supports years from 1000 - 9999
     let year = u16::try_from(date.year())
-        .unwrap_or_else(|_| panic!("NaiveDateTime out of range for Mysql: {}", date));
+        .unwrap_or_else(|_| panic!("NaiveDateTime out of range for Mysql: {date}"));
 
     buf.extend_from_slice(&year.to_le_bytes());
     buf.push(date.month() as u8);

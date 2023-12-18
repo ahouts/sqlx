@@ -41,7 +41,6 @@ use std::time::{Duration, Instant};
 /// parameter everywhere, and `Box` is in the prelude so it doesn't need to be manually imported,
 /// so having the closure return `Pin<Box<dyn Future>` directly is the path of least resistance from
 /// the perspectives of both API designer and consumer.
-#[derive(Clone)]
 pub struct PoolOptions<DB: Database> {
     pub(crate) test_before_acquire: bool,
     pub(crate) after_connect: Option<
@@ -82,6 +81,27 @@ pub struct PoolOptions<DB: Database> {
     pub(crate) fair: bool,
 
     pub(crate) parent_pool: Option<Pool<DB>>,
+}
+
+// Manually implement `Clone` to avoid a trait bound issue.
+//
+// See: https://github.com/launchbadge/sqlx/issues/2548
+impl<DB: Database> Clone for PoolOptions<DB> {
+    fn clone(&self) -> Self {
+        PoolOptions {
+            test_before_acquire: self.test_before_acquire,
+            after_connect: self.after_connect.clone(),
+            before_acquire: self.before_acquire.clone(),
+            after_release: self.after_release.clone(),
+            max_connections: self.max_connections,
+            acquire_timeout: self.acquire_timeout,
+            min_connections: self.min_connections,
+            max_lifetime: self.max_lifetime,
+            idle_timeout: self.idle_timeout,
+            fair: self.fair,
+            parent_pool: self.parent_pool.as_ref().map(Pool::clone),
+        }
+    }
 }
 
 /// Metadata for the connection being processed by a [`PoolOptions`] callback.
@@ -450,7 +470,7 @@ impl<DB: Database> PoolOptions<DB> {
     ///
     /// This ensures the configuration is correct.
     ///
-    /// The total number of connections opened is <code>min(1, [min_connections][Self::min_connections])</code>.
+    /// The total number of connections opened is <code>max(1, [min_connections][Self::min_connections])</code>.
     ///
     /// Refer to the relevant `ConnectOptions` impl for your database for the expected URL format:
     ///
@@ -466,7 +486,7 @@ impl<DB: Database> PoolOptions<DB> {
     ///
     /// This ensures the configuration is correct.
     ///
-    /// The total number of connections opened is <code>min(1, [min_connections][Self::min_connections])</code>.
+    /// The total number of connections opened is <code>max(1, [min_connections][Self::min_connections])</code>.
     pub async fn connect_with(
         self,
         options: <DB::Connection as Connection>::Options,
